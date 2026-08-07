@@ -2,8 +2,6 @@
 
 use crate::io;
 
-pub mod futex;
-
 // SAFETY: called exactly once by the standard-library runtime.
 pub unsafe fn init(_argc: isize, _argv: *const *const u8, _sigpipe: u8) {}
 

@@ -51,6 +51,18 @@ diff --git a/std/src/sys/time/mod.rs b/std/src/sys/time/mod.rs
      target_os = "motor" => {
          use moto_rt::time as imp;
      }
+diff --git a/std/src/sys/sync/futex/mod.rs b/std/src/sys/sync/futex/mod.rs
+--- a/std/src/sys/sync/futex/mod.rs
++++ b/std/src/sys/sync/futex/mod.rs
+@@ -1,4 +1,8 @@
+ cfg_select! {
++    target_os = "jvm" => {
++        mod jvm;
++        pub use jvm::*;
++    }
+     any(
+         target_os = "linux",
+         target_os = "android",
 diff --git a/std/src/sys/sync/mutex/mod.rs b/std/src/sys/sync/mutex/mod.rs
 --- a/std/src/sys/sync/mutex/mod.rs
 +++ b/std/src/sys/sync/mutex/mod.rs
