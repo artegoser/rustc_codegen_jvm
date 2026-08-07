@@ -623,6 +623,11 @@ fn live_variables(
         definitions.insert(label.clone(), block_definitions);
     }
 
+    let unwind_only_successors = body
+        .basic_blocks
+        .iter()
+        .map(|(label, block)| (label.clone(), block_unwind_only_successors(block)))
+        .collect::<HashMap<_, _>>();
     let mut live_in = body
         .basic_blocks
         .keys()
@@ -636,7 +641,14 @@ fn live_variables(
         for label in labels {
             let mut live_out = HashSet::default();
             for successor in &successors[&label] {
-                live_out.extend(live_in[successor].iter().cloned());
+                let unwind_only = unwind_only_successors[&label].contains(successor);
+                for variable in &live_in[successor] {
+                    // The generated JVM handler defines the synthetic exception local before
+                    // entering the OOMIR unwind target. Other cleanup state remains live.
+                    if !unwind_only || variable.name != UNWIND_EXCEPTION_LOCAL {
+                        live_out.insert(variable.clone());
+                    }
+                }
             }
             live_out.retain(|variable: &Variable| !definitions[&label].contains(&variable.name));
             live_out.extend(uses[&label].iter().cloned());
@@ -892,6 +904,44 @@ fn block_successors(block: &BasicBlock) -> Vec<String> {
         }
     }
     successors
+}
+
+fn block_unwind_only_successors(block: &BasicBlock) -> HashSet<String> {
+    let mut unwind = HashSet::default();
+    let mut normal = HashSet::default();
+
+    for instruction in &block.instructions {
+        match instruction {
+            oomir::Instruction::UnwindStart { target } => {
+                unwind.insert(target.clone());
+            }
+            oomir::Instruction::Jump { target } => {
+                normal.insert(target.clone());
+            }
+            oomir::Instruction::Branch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                normal.insert(true_block.clone());
+                normal.insert(false_block.clone());
+            }
+            oomir::Instruction::Switch {
+                targets, otherwise, ..
+            } => {
+                normal.extend(targets.iter().map(|(_, target)| target.clone()));
+                normal.insert(otherwise.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // `UnwindStart` names an exception-handler target, not a normal transfer. The
+    // translator stores the caught `Throwable` into `__rust_unwind_exception`
+    // before jumping there. A target that is also reached normally cannot rely on
+    // that handler-defined local on every incoming edge.
+    unwind.retain(|target| !normal.contains(target));
+    unwind
 }
 
 fn push_unique(values: &mut Vec<String>, value: &str) {
