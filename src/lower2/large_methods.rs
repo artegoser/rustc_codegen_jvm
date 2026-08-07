@@ -632,7 +632,7 @@ fn live_variables(
         .basic_blocks
         .keys()
         .map(|label| (label.clone(), HashSet::default()))
-        .collect::<HashMap<_, _>>();
+        .collect::<LiveVariables>();
     loop {
         let mut changed = false;
         let mut labels = body.basic_blocks.keys().cloned().collect::<Vec<_>>();
