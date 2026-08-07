@@ -1156,6 +1156,88 @@ mod tests {
     }
 
     #[test]
+    fn outlining_does_not_pass_handler_defined_exception_into_protected_chunk() {
+        fn padding(count: usize) -> Vec<oomir::Instruction> {
+            (0..count)
+                .map(|_| oomir::Instruction::Move {
+                    dest: "padding".to_string(),
+                    src: Operand::Constant(Constant::I32(0)),
+                })
+                .collect()
+        }
+
+        let mut entry_instructions = padding(MAX_CHUNK_COST + 1);
+        entry_instructions.push(oomir::Instruction::Jump {
+            target: "protected".to_string(),
+        });
+
+        let mut protected_instructions = padding(MAX_CHUNK_COST + 1);
+        protected_instructions.extend([
+            oomir::Instruction::UnwindStart {
+                target: "cleanup".to_string(),
+            },
+            oomir::Instruction::UnwindEnd,
+            oomir::Instruction::Return { operand: None },
+        ]);
+
+        let mut basic_blocks = HashMap::default();
+        basic_blocks.insert(
+            "entry".to_string(),
+            block("entry", entry_instructions),
+        );
+        basic_blocks.insert(
+            "protected".to_string(),
+            block("protected", protected_instructions),
+        );
+        basic_blocks.insert(
+            "cleanup".to_string(),
+            block("cleanup", vec![oomir::Instruction::Rethrow]),
+        );
+
+        let function = Function {
+            name: "outlined_unwind".to_string(),
+            owner_class: Some("Test".to_string()),
+            signature: oomir::Signature {
+                params: Vec::new(),
+                ret: Box::new(Type::Unit),
+                is_static: true,
+            },
+            debug_variables: Vec::new(),
+            body: CodeBlock {
+                entry: "entry".to_string(),
+                basic_blocks,
+            },
+        };
+
+        let outlined = outline_function(function, "Test").expect("outlining should succeed");
+        let protected = outlined
+            .iter()
+            .find(|function| function.body.basic_blocks.contains_key("protected"))
+            .expect("protected block should be outlined");
+        let cleanup = outlined
+            .iter()
+            .find(|function| function.body.basic_blocks.contains_key("cleanup"))
+            .expect("cleanup block should be outlined");
+        let exception_parameter = format!("{PARAMETER_PREFIX}{UNWIND_EXCEPTION_LOCAL}");
+
+        assert!(
+            protected
+                .signature
+                .params
+                .iter()
+                .all(|(name, _)| name != &exception_parameter)
+        );
+        assert!(
+            cleanup
+                .signature
+                .params
+                .iter()
+                .any(|(name, ty)| name == &exception_parameter
+                    && ty == &Type::Class("java/lang/Throwable".to_string()))
+        );
+    }
+
+    #[test]
     fn mixed_normal_and_unwind_target_is_not_unwind_only() {
         let block = block(
             "entry",
