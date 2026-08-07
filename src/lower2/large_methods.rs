@@ -1088,3 +1088,87 @@ fn verification_error(context: &str, message: String) -> jvm::Error {
         message,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(label: &str, instructions: Vec<oomir::Instruction>) -> BasicBlock {
+        BasicBlock {
+            label: label.to_string(),
+            instructions,
+        }
+    }
+
+    fn unwind_exception() -> Variable {
+        Variable {
+            name: UNWIND_EXCEPTION_LOCAL.to_string(),
+            ty: Type::Class("java/lang/Throwable".to_string()),
+        }
+    }
+
+    #[test]
+    fn unwind_handler_defines_exception_local_without_killing_cleanup_liveness() {
+        let value = Variable {
+            name: "value".to_string(),
+            ty: Type::I32,
+        };
+        let mut basic_blocks = HashMap::default();
+        basic_blocks.insert(
+            "entry".to_string(),
+            block(
+                "entry",
+                vec![
+                    oomir::Instruction::UnwindStart {
+                        target: "cleanup".to_string(),
+                    },
+                    oomir::Instruction::UnwindEnd,
+                    oomir::Instruction::Return { operand: None },
+                ],
+            ),
+        );
+        basic_blocks.insert(
+            "cleanup".to_string(),
+            block(
+                "cleanup",
+                vec![
+                    oomir::Instruction::Move {
+                        dest: "copy".to_string(),
+                        src: Operand::Variable {
+                            name: value.name.clone(),
+                            ty: value.ty.clone(),
+                        },
+                    },
+                    oomir::Instruction::Rethrow,
+                ],
+            ),
+        );
+        let body = CodeBlock {
+            entry: "entry".to_string(),
+            basic_blocks,
+        };
+        let successors = successor_map(&body);
+        let live = live_variables(&body, &successors, &HashMap::default());
+
+        assert!(live["cleanup"].contains(&unwind_exception()));
+        assert!(live["entry"].contains(&value));
+        assert!(!live["entry"].contains(&unwind_exception()));
+    }
+
+    #[test]
+    fn mixed_normal_and_unwind_target_is_not_unwind_only() {
+        let block = block(
+            "entry",
+            vec![
+                oomir::Instruction::UnwindStart {
+                    target: "cleanup".to_string(),
+                },
+                oomir::Instruction::Jump {
+                    target: "cleanup".to_string(),
+                },
+            ],
+        );
+
+        assert!(!block_unwind_only_successors(&block).contains("cleanup"));
+    }
+}
