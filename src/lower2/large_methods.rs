@@ -1181,10 +1181,7 @@ mod tests {
         ]);
 
         let mut basic_blocks = HashMap::default();
-        basic_blocks.insert(
-            "entry".to_string(),
-            block("entry", entry_instructions),
-        );
+        basic_blocks.insert("entry".to_string(), block("entry", entry_instructions));
         basic_blocks.insert(
             "protected".to_string(),
             block("protected", protected_instructions),
