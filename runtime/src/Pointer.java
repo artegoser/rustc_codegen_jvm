@@ -785,6 +785,13 @@ public final class Pointer implements MemoryViewOriginCarrier {
         }
 
         private void put(long key, V value) {
+            if (keys != null && (size == 0 || key > keys[size - 1])) {
+                ensureCapacity();
+                keys[size] = key;
+                values[size] = value;
+                size++;
+                return;
+            }
             int index = find(key);
             if (index >= 0) {
                 if (keys == null) {
