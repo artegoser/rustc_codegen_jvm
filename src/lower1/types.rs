@@ -5568,7 +5568,10 @@ pub(super) fn ensure_pointer_memory_codec<'tcx>(
     }
 
     let bytes_ty = byte_array_type();
+    let objects_ty = object_array_type();
     let object_storage_size = union_object_storage_size(ty, size, tcx, instance_context);
+    let aggregate = union_aggregate_layout(ty, tcx, data_types, instance_context)?;
+    let mut codec_helpers = HashMap::default();
 
     let mut encode_instructions = vec![
         oomir::Instruction::NewArray {
@@ -5580,13 +5583,67 @@ pub(super) fn ensure_pointer_memory_codec<'tcx>(
     ];
     let encode_storage = JvmUnionStorage::at_start("_bytes", "_objects");
     let mut encode_counter = 0;
-    if let Err(error) = emit_ty_to_union_bytes(
+    if let Some(aggregate) = &aggregate {
+        for (index, field) in aggregate.fields.iter().enumerate() {
+            if matches!(field.rust_ty.kind(), TyKind::Dynamic(..)) {
+                continue;
+            }
+            let helper_name = format!("_encodeField{index}");
+            let helper_signature = oomir::Signature {
+                params: vec![
+                    ("value".to_string(), value_ty.clone()),
+                    ("bytes".to_string(), bytes_ty.clone()),
+                    ("objects".to_string(), objects_ty.clone()),
+                ],
+                ret: Box::new(oomir::Type::Void),
+                is_static: true,
+            };
+            let mut helper_instructions = Vec::new();
+            let mut helper_counter = 0;
+            let one_field = UnionAggregateLayout {
+                class_name: aggregate.class_name.clone(),
+                fields: vec![field.clone()],
+            };
+            if let Err(error) = emit_aggregate_to_union_bytes(
+                &one_field,
+                operand_var("_1", value_ty.clone()),
+                &JvmUnionStorage::at_start("_2", "_3"),
+                0,
+                tcx,
+                data_types,
+                instance_context,
+                &mut helper_instructions,
+                &mut helper_counter,
+            ) {
+                data_types.remove(&class_name);
+                return Err(error);
+            }
+            helper_instructions.push(oomir::Instruction::Return { operand: None });
+            codec_helpers.insert(
+                helper_name.clone(),
+                DataTypeMethod::Function(oomir::Function {
+                    name: helper_name.clone(),
+                    owner_class: None,
+                    debug_variables: Vec::new(),
+                    signature: helper_signature.clone(),
+                    body: simple_body(helper_instructions),
+                }),
+            );
+            encode_instructions.push(oomir::Instruction::InvokeStatic {
+                dest: None,
+                class_name: class_name.clone(),
+                method_name: helper_name,
+                method_ty: helper_signature,
+                args: vec![
+                    operand_var("_1", value_ty.clone()),
+                    operand_var("_bytes", bytes_ty.clone()),
+                    operand_var("_objects", objects_ty.clone()),
+                ],
+            });
+        }
+    } else if let Err(error) = emit_ty_to_union_bytes(
         ty,
-        if value_ty.has_jvm_value() {
-            operand_var("_1", value_ty.clone())
-        } else {
-            oomir::Operand::Constant(oomir::Constant::Unit)
-        },
+        operand_var("_1", value_ty.clone()),
         &encode_storage,
         0,
         tcx,
@@ -5622,20 +5679,90 @@ pub(super) fn ensure_pointer_memory_codec<'tcx>(
     )];
     let decode_storage = JvmUnionStorage::at_start("_1", "_objects");
     let mut decode_counter = 0;
-    let decoded = match emit_ty_from_union_bytes(
-        ty,
-        &decode_storage,
-        0,
-        tcx,
-        data_types,
-        instance_context,
-        &mut decode_instructions,
-        &mut decode_counter,
-    ) {
-        Ok(decoded) => decoded,
-        Err(error) => {
-            data_types.remove(&class_name);
-            return Err(error);
+    let decoded = if let Some(aggregate) = &aggregate {
+        let mut constructor_args = Vec::new();
+        for (index, field) in aggregate.fields.iter().enumerate() {
+            let value = if matches!(field.rust_ty.kind(), TyKind::Dynamic(..)) {
+                default_operand_for_codec(&field.jvm_ty)
+            } else {
+                let helper_name = format!("_decodeField{index}");
+                let helper_signature = oomir::Signature {
+                    params: vec![
+                        ("bytes".to_string(), bytes_ty.clone()),
+                        ("objects".to_string(), objects_ty.clone()),
+                    ],
+                    ret: Box::new(field.jvm_ty.clone()),
+                    is_static: true,
+                };
+                let mut helper_instructions = Vec::new();
+                let mut helper_counter = 0;
+                let value = match emit_ty_from_union_bytes(
+                    field.rust_ty,
+                    &JvmUnionStorage::at_start("_1", "_2"),
+                    field.offset,
+                    tcx,
+                    data_types,
+                    instance_context,
+                    &mut helper_instructions,
+                    &mut helper_counter,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        data_types.remove(&class_name);
+                        return Err(error);
+                    }
+                };
+                helper_instructions.push(oomir::Instruction::Return {
+                    operand: Some(value),
+                });
+                codec_helpers.insert(
+                    helper_name.clone(),
+                    DataTypeMethod::Function(oomir::Function {
+                        name: helper_name.clone(),
+                        owner_class: None,
+                        debug_variables: Vec::new(),
+                        signature: helper_signature.clone(),
+                        body: simple_body(helper_instructions),
+                    }),
+                );
+                let dest = next_union_temp("union_decoded_field", &mut decode_counter);
+                decode_instructions.push(oomir::Instruction::InvokeStatic {
+                    dest: Some(dest.clone()),
+                    class_name: class_name.clone(),
+                    method_name: helper_name,
+                    method_ty: helper_signature,
+                    args: vec![
+                        operand_var("_1", bytes_ty.clone()),
+                        operand_var("_objects", objects_ty.clone()),
+                    ],
+                });
+                operand_var(dest, field.jvm_ty.clone())
+            };
+            constructor_args.push((value, field.jvm_ty.clone()));
+        }
+        let dest = next_union_temp("union_aggregate_value", &mut decode_counter);
+        decode_instructions.push(oomir::Instruction::ConstructObject {
+            dest: dest.clone(),
+            class_name: aggregate.class_name.clone(),
+            args: constructor_args,
+        });
+        operand_var(dest, value_ty.clone())
+    } else {
+        match emit_ty_from_union_bytes(
+            ty,
+            &decode_storage,
+            0,
+            tcx,
+            data_types,
+            instance_context,
+            &mut decode_instructions,
+            &mut decode_counter,
+        ) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                data_types.remove(&class_name);
+                return Err(error);
+            }
         }
     };
     decode_instructions.push(oomir::Instruction::Return {
@@ -5690,6 +5817,7 @@ pub(super) fn ensure_pointer_memory_codec<'tcx>(
         ("decode".to_string(), DataTypeMethod::Function(decode)),
         ("bind".to_string(), DataTypeMethod::Function(bind)),
     ]);
+    methods.extend(codec_helpers);
     if let TyKind::Array(element_ty, _) = ty.kind() {
         let element_size = layout_size_bytes(tcx, *element_ty)?;
         let element_codec =
