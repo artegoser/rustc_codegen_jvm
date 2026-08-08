@@ -75,3 +75,15 @@ pub fn rust_function_pointer() -> fn(i32) -> i32 {
 pub fn rust_non_capturing_closure_pointer() -> fn(i32) -> i32 {
     |value| value * 2
 }
+
+struct ClosureDependency<T>(T);
+
+impl<T: Copy> ClosureDependency<T> {
+    fn project(&self) -> T {
+        self.0
+    }
+}
+
+pub fn rust_non_capturing_closure_pointer_with_associated_callee() -> fn(i32) -> i32 {
+    |value| ClosureDependency(value).project() * 2
+}

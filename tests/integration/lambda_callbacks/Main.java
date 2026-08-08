@@ -51,10 +51,16 @@ public class Main {
 
         FnPtr_int_to_int rustFunction = lambda_callbacks.lambda_callbacks.rust_function_pointer();
         FnPtr_int_to_int rustClosure = lambda_callbacks.lambda_callbacks.rust_non_capturing_closure_pointer();
-        if (rustFunction.call(39) != 42 || rustClosure.call(21) != 42) {
+        FnPtr_int_to_int rustClosureWithCallee =
+            lambda_callbacks.lambda_callbacks.rust_non_capturing_closure_pointer_with_associated_callee();
+        if (rustFunction.call(39) != 42
+                || rustClosure.call(21) != 42
+                || rustClosureWithCallee.call(21) != 42) {
             throw new AssertionError("Rust invokedynamic function pointers failed");
         }
-        if (!rustFunction.getClass().isSynthetic() || !rustClosure.getClass().isSynthetic()) {
+        if (!rustFunction.getClass().isSynthetic()
+                || !rustClosure.getClass().isSynthetic()
+                || !rustClosureWithCallee.getClass().isSynthetic()) {
             throw new AssertionError("stateless Rust callables should use JVM lambda classes");
         }
     }

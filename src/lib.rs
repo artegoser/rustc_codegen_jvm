@@ -935,7 +935,31 @@ fn direct_mir_callees<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Vec<
             let rustc_middle::mir::StatementKind::Assign(box (_, rvalue)) = &statement.kind else {
                 continue;
             };
-            let rustc_middle::mir::Rvalue::Cast(
+
+            // lower1 can compile a non-capturing closure MIR body directly into
+            // `_fn_ptr_impl` for this coercion even when rustc emitted no
+            // standalone closure MonoItem. Treat the coercion as a real
+            // dependency edge so callees referenced by that synthetic body are
+            // included in supplemental lowering as well.
+            if let rustc_middle::mir::Rvalue::Cast(
+                rustc_middle::mir::CastKind::PointerCoercion(
+                    rustc_middle::ty::adjustment::PointerCoercion::ClosureFnPointer(_),
+                    _,
+                ),
+                source,
+                _,
+            ) = rvalue
+            {
+                let closure_ty = normalized_instance_ty(tcx, instance, source.ty(mir, tcx));
+                if let TyKind::Closure(def_id, closure_args) = closure_ty.kind() {
+                    let closure_instance = Instance::new_raw(*def_id, closure_args);
+                    if tcx.is_mir_available(closure_instance.def_id()) {
+                        callees.push(closure_instance);
+                    }
+                }
+            }
+
+            if let rustc_middle::mir::Rvalue::Cast(
                 rustc_middle::mir::CastKind::PointerCoercion(
                     rustc_middle::ty::adjustment::PointerCoercion::Unsize,
                     _,
@@ -943,15 +967,14 @@ fn direct_mir_callees<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Vec<
                 source,
                 target_ty,
             ) = rvalue
-            else {
-                continue;
-            };
-            callees.extend(unsize_vtable_callees(
-                tcx,
-                instance,
-                source.ty(mir, tcx),
-                *target_ty,
-            ));
+            {
+                callees.extend(unsize_vtable_callees(
+                    tcx,
+                    instance,
+                    source.ty(mir, tcx),
+                    *target_ty,
+                ));
+            }
         }
     }
     callees

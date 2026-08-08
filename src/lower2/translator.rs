@@ -6268,9 +6268,12 @@ impl<'a, 'cp> FunctionTranslator<'a, 'cp> {
         args: &[oomir::Operand],
     ) -> Result<(), jvm::Error> {
         let method_key = oomir::FunctionKey::new(class_name, method_name, method_ty);
+        // A `$relative` call is valid only when this exact owner/name/signature
+        // is known to have a relative-pointer implementation in this module.
+        // Cross-CGU and receiver-attached Rust methods may expose only the
+        // stable bridge, so signature shape alone is not sufficient.
         let use_relative_pointer_abi = method_ty.supports_relative_pointer_abi()
-            && (!crate::lower1::naming::is_global_link_symbol_class(class_name)
-                || self.relative_static_methods.contains(&method_key));
+            && self.relative_static_methods.contains(&method_key);
         let invoked_name = if use_relative_pointer_abi {
             format!("{method_name}{}", oomir::RELATIVE_POINTER_METHOD_SUFFIX)
         } else {
