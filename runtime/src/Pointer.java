@@ -3903,7 +3903,6 @@ public final class Pointer implements MemoryViewOriginCarrier {
         maybeRebuildMemoryViewFilter();
         setBoundMemoryViewState(state);
         registerMemoryViewOrigin(decoded);
-        bindDecodedMemoryView(decoded);
         return decoded;
     }
 
@@ -4167,7 +4166,6 @@ public final class Pointer implements MemoryViewOriginCarrier {
         }
         advanceMemoryViewEpoch(allocation);
         registerMemoryViewOrigin(state.value);
-        bindDecodedMemoryView(state.value);
     }
 
     private Object managedViewObject() {
