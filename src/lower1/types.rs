@@ -325,6 +325,13 @@ struct UnionAggregateLayout<'tcx> {
     fields: Vec<UnionAggregateField<'tcx>>,
 }
 
+fn can_split_nested_union_aggregate(ty: Ty<'_>, tcx: TyCtxt<'_>) -> bool {
+    !matches!(
+        ty.kind(),
+        TyKind::Adt(adt_def, _) if tcx.is_diagnostic_item(sym::NonNull, adt_def.did())
+    )
+}
+
 #[derive(Clone)]
 struct CoroutineMemoryLayout<'tcx> {
     class_name: String,
@@ -1977,7 +1984,7 @@ fn emit_split_aggregate_to_union_bytes<'tcx>(
         let field_source = operand_var(field_dest, field.jvm_ty.clone());
         if let Some(nested) =
             union_aggregate_layout(field.rust_ty, tcx, data_types, instance_context)?
-                .filter(|nested| nested.fields.len() > 1)
+                .filter(|_| can_split_nested_union_aggregate(field.rust_ty, tcx))
         {
             emit_split_aggregate_to_union_bytes(
                 &nested,
@@ -2067,7 +2074,7 @@ fn emit_split_aggregate_from_union_bytes<'tcx>(
             let helper_storage = JvmUnionStorage::at_start("_1", "_2");
             let value = if let Some(nested) =
                 union_aggregate_layout(field.rust_ty, tcx, data_types, instance_context)?
-                    .filter(|nested| nested.fields.len() > 1)
+                    .filter(|_| can_split_nested_union_aggregate(field.rust_ty, tcx))
             {
                 emit_split_aggregate_from_union_bytes(
                     &nested,
@@ -6250,6 +6257,7 @@ fn union_from_function<'tcx>(
     field_name: &str,
     field_ty: Ty<'tcx>,
     field_oomir_ty: oomir::Type,
+    methods: &mut HashMap<String, DataTypeMethod>,
     tcx: TyCtxt<'tcx>,
     data_types: &mut HashMap<String, oomir::DataType>,
     instance_context: rustc_middle::ty::Instance<'tcx>,
@@ -6265,17 +6273,37 @@ fn union_from_function<'tcx>(
     ];
     let mut temp_counter = 0;
     let storage = JvmUnionStorage::at_start("_bytes", "_objects");
-    let body = match emit_ty_to_union_bytes(
-        field_ty,
-        operand_var("_1", field_oomir_ty.clone()),
-        &storage,
-        0,
-        tcx,
-        data_types,
-        instance_context,
-        &mut instructions,
-        &mut temp_counter,
-    ) {
+    let aggregate = union_aggregate_layout(field_ty, tcx, data_types, instance_context)
+        .ok()
+        .flatten();
+    let encoded = if let Some(aggregate) = &aggregate {
+        emit_split_aggregate_to_union_bytes(
+            aggregate,
+            operand_var("_1", field_oomir_ty.clone()),
+            &storage,
+            0,
+            &format!("Union{}", sanitize_name_token(field_name)),
+            union_class,
+            tcx,
+            data_types,
+            instance_context,
+            &mut instructions,
+            methods,
+        )
+    } else {
+        emit_ty_to_union_bytes(
+            field_ty,
+            operand_var("_1", field_oomir_ty.clone()),
+            &storage,
+            0,
+            tcx,
+            data_types,
+            instance_context,
+            &mut instructions,
+            &mut temp_counter,
+        )
+    };
+    let body = match encoded {
         Ok(()) => {
             instructions.push(oomir::Instruction::ConstructObject {
                 dest: "_ret".to_string(),
@@ -6331,6 +6359,7 @@ fn union_getter_function<'tcx>(
     field_name: &str,
     field_ty: Ty<'tcx>,
     field_oomir_ty: oomir::Type,
+    methods: &mut HashMap<String, DataTypeMethod>,
     tcx: TyCtxt<'tcx>,
     data_types: &mut HashMap<String, oomir::DataType>,
     instance_context: rustc_middle::ty::Instance<'tcx>,
@@ -6370,16 +6399,36 @@ fn union_getter_function<'tcx>(
     ];
     let mut temp_counter = 0;
     let storage = JvmUnionStorage::at_start("_bytes", "_objects");
-    let body = match emit_ty_from_union_bytes(
-        field_ty,
-        &storage,
-        0,
-        tcx,
-        data_types,
-        instance_context,
-        &mut instructions,
-        &mut temp_counter,
-    ) {
+    let aggregate = union_aggregate_layout(field_ty, tcx, data_types, instance_context)
+        .ok()
+        .flatten();
+    let decoded = if let Some(aggregate) = &aggregate {
+        emit_split_aggregate_from_union_bytes(
+            aggregate,
+            &storage,
+            0,
+            &format!("Union{}", sanitize_name_token(field_name)),
+            union_class,
+            tcx,
+            data_types,
+            instance_context,
+            &mut instructions,
+            methods,
+            &mut temp_counter,
+        )
+    } else {
+        emit_ty_from_union_bytes(
+            field_ty,
+            &storage,
+            0,
+            tcx,
+            data_types,
+            instance_context,
+            &mut instructions,
+            &mut temp_counter,
+        )
+    };
+    let body = match decoded {
         Ok(value) => {
             instructions.push(oomir::Instruction::Return {
                 operand: Some(value),
@@ -6420,6 +6469,7 @@ fn union_setter_function<'tcx>(
     field_name: &str,
     field_ty: Ty<'tcx>,
     field_oomir_ty: oomir::Type,
+    methods: &mut HashMap<String, DataTypeMethod>,
     tcx: TyCtxt<'tcx>,
     data_types: &mut HashMap<String, oomir::DataType>,
     instance_context: rustc_middle::ty::Instance<'tcx>,
@@ -6443,17 +6493,37 @@ fn union_setter_function<'tcx>(
     ];
     let mut temp_counter = 0;
     let storage = JvmUnionStorage::at_start("_bytes", "_objects");
-    let body = match emit_ty_to_union_bytes(
-        field_ty,
-        operand_var("_2", field_oomir_ty.clone()),
-        &storage,
-        0,
-        tcx,
-        data_types,
-        instance_context,
-        &mut instructions,
-        &mut temp_counter,
-    ) {
+    let aggregate = union_aggregate_layout(field_ty, tcx, data_types, instance_context)
+        .ok()
+        .flatten();
+    let encoded = if let Some(aggregate) = &aggregate {
+        emit_split_aggregate_to_union_bytes(
+            aggregate,
+            operand_var("_2", field_oomir_ty.clone()),
+            &storage,
+            0,
+            &format!("Union{}", sanitize_name_token(field_name)),
+            union_class,
+            tcx,
+            data_types,
+            instance_context,
+            &mut instructions,
+            methods,
+        )
+    } else {
+        emit_ty_to_union_bytes(
+            field_ty,
+            operand_var("_2", field_oomir_ty.clone()),
+            &storage,
+            0,
+            tcx,
+            data_types,
+            instance_context,
+            &mut instructions,
+            &mut temp_counter,
+        )
+    };
+    let body = match encoded {
         Ok(()) => {
             instructions.push(oomir::Instruction::Return { operand: None });
             simple_body(instructions)
@@ -6540,43 +6610,49 @@ pub fn ensure_union_data_type<'tcx>(
             resolve_union_ty(tcx, raw_field_ty, instance_context).unwrap_or(raw_field_ty);
         let field_oomir_ty = ty_to_oomir_type(field_ty, tcx, data_types, instance_context);
 
+        let from = union_from_function(
+            &union_class,
+            union_size,
+            object_storage_size,
+            &field_name,
+            field_ty,
+            field_oomir_ty.clone(),
+            &mut methods,
+            tcx,
+            data_types,
+            instance_context,
+        );
         methods.insert(
             union_from_method_name(&field_name),
-            DataTypeMethod::Function(union_from_function(
-                &union_class,
-                union_size,
-                object_storage_size,
-                &field_name,
-                field_ty,
-                field_oomir_ty.clone(),
-                tcx,
-                data_types,
-                instance_context,
-            )),
+            DataTypeMethod::Function(from),
+        );
+        let getter = union_getter_function(
+            &union_class,
+            &field_name,
+            field_ty,
+            field_oomir_ty.clone(),
+            &mut methods,
+            tcx,
+            data_types,
+            instance_context,
         );
         methods.insert(
             union_getter_method_name(&field_name),
-            DataTypeMethod::Function(union_getter_function(
-                &union_class,
-                &field_name,
-                field_ty,
-                field_oomir_ty.clone(),
-                tcx,
-                data_types,
-                instance_context,
-            )),
+            DataTypeMethod::Function(getter),
+        );
+        let setter = union_setter_function(
+            &union_class,
+            &field_name,
+            field_ty,
+            field_oomir_ty,
+            &mut methods,
+            tcx,
+            data_types,
+            instance_context,
         );
         methods.insert(
             union_setter_method_name(&field_name),
-            DataTypeMethod::Function(union_setter_function(
-                &union_class,
-                &field_name,
-                field_ty,
-                field_oomir_ty,
-                tcx,
-                data_types,
-                instance_context,
-            )),
+            DataTypeMethod::Function(setter),
         );
     }
 
