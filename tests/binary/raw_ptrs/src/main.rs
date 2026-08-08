@@ -1833,9 +1833,84 @@ struct AlignedBox<T> {
     inner: T,
 }
 
+#[repr(C)]
 struct DeepNode {
     value: i32,
     next: *mut AlignedBox<DeepNode>,
+}
+
+#[repr(transparent)]
+struct DeepNodeWrapper(DeepNode);
+
+#[repr(C)]
+struct DeepNodeRetyped {
+    value: i32,
+    next: *mut AlignedBox<DeepNode>,
+}
+
+struct ZstHolder {
+    marker: ZeroSized,
+}
+
+fn read_managed_inner(mut base: AlignedBox<DeepNode>) -> DeepNode {
+    let inner_alias = core::ptr::addr_of_mut!(base.inner);
+    unsafe { inner_alias.read() }
+}
+
+fn assign_transparent_inner(
+    mut base: AlignedBox<DeepNode>,
+    replacement: DeepNode,
+) -> AlignedBox<DeepNode> {
+    let inner_alias = core::ptr::addr_of_mut!(base.inner);
+    let wrapped = inner_alias.cast::<DeepNodeWrapper>();
+    unsafe {
+        wrapped.write(DeepNodeWrapper(replacement));
+    }
+    base
+}
+
+fn assign_retyped_inner(
+    mut base: AlignedBox<DeepNode>,
+    replacement: DeepNodeRetyped,
+) -> AlignedBox<DeepNode> {
+    let inner_alias = core::ptr::addr_of_mut!(base.inner);
+    let retyped = inner_alias.cast::<DeepNodeRetyped>();
+    unsafe {
+        retyped.write(replacement);
+    }
+    base
+}
+
+fn assign_deferred_inner(
+    mut bases: [AlignedBox<DeepNode>; 2],
+    replacement: DeepNode,
+) -> [AlignedBox<DeepNode>; 2] {
+    let base = bases.as_mut_ptr();
+    let deferred = unsafe { base.add(1) };
+    let inner_alias = unsafe { core::ptr::addr_of_mut!((*deferred).inner) };
+    unsafe {
+        inner_alias.write(replacement);
+    }
+    bases
+}
+
+fn assign_zst(mut base: ZstHolder) -> ZstHolder {
+    let marker = core::ptr::addr_of_mut!(base.marker);
+    unsafe {
+        marker.write(ZeroSized);
+    }
+    base
+}
+
+fn assign_managed_inner(
+    mut base: AlignedBox<DeepNode>,
+    replacement: DeepNode,
+) -> AlignedBox<DeepNode> {
+    let inner_alias = core::ptr::addr_of_mut!(base.inner);
+    unsafe {
+        inner_alias.write(replacement);
+    }
+    base
 }
 
 fn deep_pointer_indirection_and_alignment() {
@@ -1874,6 +1949,92 @@ fn deep_pointer_indirection_and_alignment() {
         (*next_c).inner.value = 42;
     }
     assert_eq!(node_c.inner.value, 42);
+
+    let readback = read_managed_inner(AlignedBox {
+        inner: DeepNode {
+            value: 7,
+            next: core::ptr::null_mut(),
+        },
+    });
+    assert_eq!(readback.value, 7);
+
+    let wrapped_box = assign_transparent_inner(
+        AlignedBox {
+            inner: DeepNode {
+                value: 1,
+                next: core::ptr::null_mut(),
+            },
+        },
+        DeepNode {
+            value: 8,
+            next: core::ptr::null_mut(),
+        },
+    );
+    assert_eq!(wrapped_box.inner.value, 8);
+
+    let retyped_box = assign_retyped_inner(
+        AlignedBox {
+            inner: DeepNode {
+                value: 1,
+                next: core::ptr::null_mut(),
+            },
+        },
+        DeepNodeRetyped {
+            value: 9,
+            next: core::ptr::null_mut(),
+        },
+    );
+    assert_eq!(retyped_box.inner.value, 9);
+
+    let deferred_boxes = assign_deferred_inner(
+        [
+            AlignedBox {
+                inner: DeepNode {
+                    value: 2,
+                    next: core::ptr::null_mut(),
+                },
+            },
+            AlignedBox {
+                inner: DeepNode {
+                    value: 3,
+                    next: core::ptr::null_mut(),
+                },
+            },
+        ],
+        DeepNode {
+            value: 10,
+            next: core::ptr::null_mut(),
+        },
+    );
+    assert_eq!(deferred_boxes[0].inner.value, 2);
+    assert_eq!(deferred_boxes[1].inner.value, 10);
+
+    let zst = assign_zst(ZstHolder { marker: ZeroSized });
+    let zst_address = core::ptr::addr_of!(zst.marker) as usize;
+    assert_ne!(zst_address, 0);
+
+    let mut managed_box = assign_managed_inner(
+        AlignedBox {
+            inner: DeepNode {
+                value: 1,
+                next: core::ptr::null_mut(),
+            },
+        },
+        DeepNode {
+            value: 42,
+            next: core::ptr::null_mut(),
+        },
+    );
+    let inner_alias = core::ptr::addr_of_mut!(managed_box.inner);
+    unsafe {
+        let readback = inner_alias.read();
+        assert_eq!(readback.value, 42);
+
+        let value_alias = core::ptr::addr_of_mut!((*inner_alias).value);
+        let value_bytes = value_alias.cast::<u8>();
+        assert_eq!(*value_bytes, 42);
+    }
+    assert_eq!(managed_box.inner.value, 42);
 }
 
 fn extreme_wrapping_pointer_arithmetic() {
