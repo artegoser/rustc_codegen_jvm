@@ -1152,8 +1152,7 @@ fn create_managed_copy_method(
             instructions.push(Instruction::Invokestatic(materialize));
             max_stack = max_stack.max(7u16.saturating_add(argument_slots));
         } else if field_ty.is_jvm_reference_type() {
-            let use_direct_rust_copy = matches!(
-                field_ty,
+            let direct_copy_class = match field_ty {
                 Type::Class(field_class_name)
                     if matches!(
                         module.data_types.get(field_class_name),
@@ -1161,16 +1160,17 @@ fn create_managed_copy_method(
                             is_abstract: false,
                             ..
                         })
-                    )
-            );
-            if use_direct_rust_copy {
-                let rust_copy_interface = cp.add_class("org/rustlang/runtime/RustCopy")?;
-                let rust_copy = cp.add_interface_method_ref(
-                    rust_copy_interface,
-                    "rustCopy",
-                    "()Ljava/lang/Object;",
-                )?;
-                instructions.push(Instruction::Invokeinterface(rust_copy, 1));
+                    ) =>
+                {
+                    Some(field_class_name)
+                }
+                _ => None,
+            };
+            if let Some(field_class_name) = direct_copy_class {
+                let field_class = cp.add_class(field_class_name)?;
+                let rust_copy =
+                    cp.add_method_ref(field_class, "rustCopy", "()Ljava/lang/Object;")?;
+                instructions.push(Instruction::Invokevirtual(rust_copy));
             } else {
                 instructions.push(Instruction::Invokestatic(copy_managed_value));
             }
