@@ -9582,8 +9582,6 @@ public final class Pointer implements MemoryViewOriginCarrier {
         if (base == null) {
             throw new NullPointerException("attempted to dereference a null Rust pointer");
         }
-        long absoluteByteOffset =
-                base.relativeByteOffset(elementOffset, byteOffset);
         boolean sameCodec = base.allocationCodecClassName == null
                 ? base.viewCodecClassName == null
                 : base.allocationCodecClassName.equals(base.viewCodecClassName);
@@ -9598,6 +9596,8 @@ public final class Pointer implements MemoryViewOriginCarrier {
                 && sameCodec) {
             return ((Cell) base.allocation).value;
         }
+        long absoluteByteOffset =
+                base.relativeByteOffset(elementOffset, byteOffset);
         if (base.allocation != null
                 && base.allocationElementSize > 0
                 && absoluteByteOffset % base.allocationElementSize == 0
