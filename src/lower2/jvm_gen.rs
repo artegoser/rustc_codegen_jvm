@@ -1108,6 +1108,7 @@ fn create_managed_copy_method(
     this_class_index: u16,
     class_name: &str,
     fields: &[(String, Type)],
+    module: &oomir::Module,
 ) -> jvm::Result<jvm::Method> {
     let descriptor = "()Ljava/lang/Object;";
     let constructor_descriptor = format!(
@@ -1151,7 +1152,28 @@ fn create_managed_copy_method(
             instructions.push(Instruction::Invokestatic(materialize));
             max_stack = max_stack.max(7u16.saturating_add(argument_slots));
         } else if field_ty.is_jvm_reference_type() {
-            instructions.push(Instruction::Invokestatic(copy_managed_value));
+            let use_direct_rust_copy = matches!(
+                field_ty,
+                Type::Class(field_class_name)
+                    if matches!(
+                        module.data_types.get(field_class_name),
+                        Some(oomir::DataType::Class {
+                            is_abstract: false,
+                            ..
+                        })
+                    )
+            );
+            if use_direct_rust_copy {
+                let rust_copy_interface = cp.add_class("org/rustlang/runtime/RustCopy")?;
+                let rust_copy = cp.add_interface_method_ref(
+                    rust_copy_interface,
+                    "rustCopy",
+                    "()Ljava/lang/Object;",
+                )?;
+                instructions.push(Instruction::Invokeinterface(rust_copy, 1));
+            } else {
+                instructions.push(Instruction::Invokestatic(copy_managed_value));
+            }
             instructions.extend(get_cast_instructions(
                 "rustCopy",
                 &object_type,
@@ -1732,6 +1754,7 @@ pub(super) fn create_data_type_classfile_for_class(
             this_class_index,
             class_name_jvm,
             &fields,
+            module,
         )?);
     }
     let mut class_attributes = Vec::new();
