@@ -12,6 +12,28 @@ pub struct OrderedConstant {
     pub a_flag: bool,
 }
 
+#[repr(C)]
+pub struct OriginalView {
+    pub left: u32,
+    pub right: u32,
+}
+
+#[repr(C)]
+pub struct AliasView {
+    pub left: u32,
+    pub right: u32,
+}
+
+pub fn read_alias_view(value: &mut OriginalView) -> u32 {
+    let alias = value as *mut OriginalView as *mut AliasView;
+    unsafe { (*alias).right }
+}
+
+pub fn original_view_first_byte(mut value: OriginalView) -> u8 {
+    let bytes = &mut value as *mut OriginalView as *mut u8;
+    unsafe { *bytes }
+}
+
 pub const DEFAULT_PROFILE: OrderedConstant = OrderedConstant {
     z_value: 36,
     a_flag: true,

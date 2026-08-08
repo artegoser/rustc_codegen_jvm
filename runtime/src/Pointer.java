@@ -9591,6 +9591,7 @@ public final class Pointer implements MemoryViewOriginCarrier {
                 && base.byteOffset == 0
                 && base.viewSize == base.allocationElementSize
                 && base.rareState == null
+                && directCellHasNoMemoryViews(base.allocation)
                 && !((Cell) base.allocation).hasStructuralView
                 && !isStructuralViewCodec(base.viewCodecClassName)
                 && sameCodec) {
@@ -9770,7 +9771,7 @@ public final class Pointer implements MemoryViewOriginCarrier {
         if (traitObjectCarrier() != null) {
             return traitObjectCarrier();
         }
-        Object direct = directCellValueOrSelf();
+        Object direct = flushedDirectCellValueOrSelf();
         if (direct != this && direct instanceof TraitObjectCarrier) {
             return direct;
         }
@@ -9906,6 +9907,20 @@ public final class Pointer implements MemoryViewOriginCarrier {
         return this;
     }
 
+    private Object flushedDirectCellValueOrSelf() {
+        Object direct = directCellValueOrSelf();
+        if (direct != this
+                && (allocation instanceof Cell
+                        || allocation instanceof ReceiverCell
+                        || allocation instanceof FieldCell)
+                && !directCellHasNoMemoryViews(allocation)) {
+            flushMemoryViewsOverlapping(
+                    byteOffset, Math.max(1, allocationElementSize));
+            return directCellValueOrSelf();
+        }
+        return direct;
+    }
+
     public Object getObjectAs(String targetClassName) {
         if (targetClassName == null || targetClassName.isEmpty()) {
             return getObject();
@@ -9924,6 +9939,7 @@ public final class Pointer implements MemoryViewOriginCarrier {
                 && viewSize == allocationElementSize
                 && traitObjectCarrier() == null
                 && rareState == null
+                && directCellHasNoMemoryViews(allocation)
                 && !((Cell) allocation).hasStructuralView
                 && !isStructuralViewCodec(viewCodecClassName)
                 && (allocationCodecClassName == null
@@ -9931,7 +9947,7 @@ public final class Pointer implements MemoryViewOriginCarrier {
                         : allocationCodecClassName.equals(viewCodecClassName))) {
             return ((Cell) allocation).value;
         }
-        Object direct = directCellValueOrSelf();
+        Object direct = flushedDirectCellValueOrSelf();
         if (direct != this
                 && traitObjectCarrier() == null
                 && zeroSizedSourceViewSize() < 0

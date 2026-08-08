@@ -11,6 +11,7 @@ public class Main {
         assertFieldlessNoArgsConstructorRemains();
         assertConstantStructUsesDeclarationOrder();
         assertMemoryViewOriginCarrier();
+        assertDirectCellFlushesAliasedMemoryView();
 
         System.out.println("Struct method mapping test passed!");
     }
@@ -139,6 +140,53 @@ public class Main {
         if (carrier.$rcj$getMemoryViewOrigin() != null) {
             throw new AssertionError(
                     "carrier-local memory-view origin must be clearable");
+        }
+    }
+
+    private static void assertDirectCellFlushesAliasedMemoryView() {
+        struct_methods.OriginalView original =
+                new struct_methods.OriginalView(11, 22);
+        org.rustlang.runtime.Pointer base =
+                org.rustlang.runtime.Pointer.cellAligned(
+                        original,
+                        8,
+                        "struct_methods/PointerCodec_struct_methods_OriginalView_8bytes",
+                        4);
+        org.rustlang.runtime.Pointer alias = base.retype(
+                8,
+                "struct_methods/PointerCodec_struct_methods_AliasView_8bytes");
+        struct_methods.AliasView decoded =
+                (struct_methods.AliasView) alias.getObjectAs("struct_methods/AliasView");
+        decoded.right = 77;
+
+        struct_methods.OriginalView observed =
+                (struct_methods.OriginalView) org.rustlang.runtime.Pointer.getObjectRelative(
+                        base, 0, 0, "struct_methods/OriginalView");
+        if (observed.right != 77) {
+            throw new AssertionError(
+                    "direct cell load must flush mutations from an aliased decoded view");
+        }
+
+        struct_methods.OriginalView second =
+                new struct_methods.OriginalView(33, 44);
+        org.rustlang.runtime.Pointer secondBase =
+                org.rustlang.runtime.Pointer.cellAligned(
+                        second,
+                        8,
+                        "struct_methods/PointerCodec_struct_methods_OriginalView_8bytes",
+                        4);
+        org.rustlang.runtime.Pointer secondAlias = secondBase.retype(
+                8,
+                "struct_methods/PointerCodec_struct_methods_AliasView_8bytes");
+        struct_methods.AliasView secondDecoded =
+                (struct_methods.AliasView) secondAlias.getObjectAs("struct_methods/AliasView");
+        secondDecoded.right = 88;
+
+        struct_methods.OriginalView secondObserved =
+                (struct_methods.OriginalView) secondBase.getObjectAs("struct_methods/OriginalView");
+        if (secondObserved.right != 88) {
+            throw new AssertionError(
+                    "direct object load must flush mutations from an aliased decoded view");
         }
     }
 
