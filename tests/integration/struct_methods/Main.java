@@ -10,6 +10,7 @@ public class Main {
         assertInstanceAndStaticSelfMethods();
         assertFieldlessNoArgsConstructorRemains();
         assertConstantStructUsesDeclarationOrder();
+        assertMemoryViewOriginCarrier();
 
         System.out.println("Struct method mapping test passed!");
     }
@@ -93,4 +94,52 @@ public class Main {
             throw new AssertionError("constant structs should use declaration-order constructor arguments");
         }
     }
+
+    private static void assertMemoryViewOriginCarrier() throws Exception {
+        Class<?> carrierClass = org.rustlang.runtime.MemoryViewOriginCarrier.class;
+
+        if (!carrierClass.isAssignableFrom(struct_methods.NamedCounter.class)) {
+            throw new AssertionError(
+                    "generated Rust aggregate must implement MemoryViewOriginCarrier");
+        }
+
+        java.lang.reflect.Field originField =
+                struct_methods.NamedCounter.class.getDeclaredField("$rcj$memoryViewOrigin");
+
+        int modifiers = originField.getModifiers();
+        if (!Modifier.isPrivate(modifiers)
+                || !Modifier.isVolatile(modifiers)
+                || !originField.isSynthetic()) {
+            throw new AssertionError(
+                    "memory-view origin field must be private, volatile, and synthetic");
+        }
+
+        struct_methods.NamedCounter counter =
+                struct_methods.NamedCounter.new_disabled(
+                        org.rustlang.runtime.Utf8View.fromJavaString("origin"), 1);
+
+        org.rustlang.runtime.MemoryViewOriginCarrier carrier =
+                (org.rustlang.runtime.MemoryViewOriginCarrier) counter;
+
+        if (carrier.$rcj$getMemoryViewOrigin() != null) {
+            throw new AssertionError(
+                    "new aggregate carrier must start without an origin");
+        }
+
+        Object marker = new Object();
+        carrier.$rcj$setMemoryViewOrigin(marker);
+
+        if (carrier.$rcj$getMemoryViewOrigin() != marker) {
+            throw new AssertionError(
+                    "carrier-local memory-view origin must preserve identity");
+        }
+
+        carrier.$rcj$setMemoryViewOrigin(null);
+
+        if (carrier.$rcj$getMemoryViewOrigin() != null) {
+            throw new AssertionError(
+                    "carrier-local memory-view origin must be clearable");
+        }
+    }
+
 }

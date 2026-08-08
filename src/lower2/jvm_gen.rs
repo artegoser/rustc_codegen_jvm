@@ -1527,6 +1527,70 @@ fn append_field_equality_check(
     Ok(())
 }
 
+const MEMORY_VIEW_ORIGIN_CARRIER: &str = "org/rustlang/runtime/MemoryViewOriginCarrier";
+const MEMORY_VIEW_ORIGIN_FIELD: &str = "$rcj$memoryViewOrigin";
+
+fn create_memory_view_origin_methods(
+    cp: &mut InternedConstantPool,
+    this_class_index: u16,
+    class_name_jvm: &str,
+) -> jvm::Result<Vec<jvm::Method>> {
+    let origin_field = cp.add_field_ref(
+        this_class_index,
+        MEMORY_VIEW_ORIGIN_FIELD,
+        "Ljava/lang/Object;",
+    )?;
+
+    let getter_descriptor = "()Ljava/lang/Object;";
+    let getter = jvm::Method {
+        access_flags: MethodAccessFlags::PUBLIC
+            | MethodAccessFlags::FINAL
+            | MethodAccessFlags::SYNTHETIC,
+        name_index: cp.add_utf8("$rcj$getMemoryViewOrigin")?,
+        descriptor_index: cp.add_utf8(getter_descriptor)?,
+        attributes: vec![code_attribute_for_descriptor(
+            cp,
+            1,
+            1,
+            vec![
+                Instruction::Aload_0,
+                Instruction::Getfield(origin_field),
+                Instruction::Areturn,
+            ],
+            getter_descriptor,
+            false,
+            Some(class_name_jvm),
+            "$rcj$getMemoryViewOrigin",
+        )?],
+    };
+
+    let setter_descriptor = "(Ljava/lang/Object;)V";
+    let setter = jvm::Method {
+        access_flags: MethodAccessFlags::PUBLIC
+            | MethodAccessFlags::FINAL
+            | MethodAccessFlags::SYNTHETIC,
+        name_index: cp.add_utf8("$rcj$setMemoryViewOrigin")?,
+        descriptor_index: cp.add_utf8(setter_descriptor)?,
+        attributes: vec![code_attribute_for_descriptor(
+            cp,
+            2,
+            2,
+            vec![
+                Instruction::Aload_0,
+                Instruction::Aload_1,
+                Instruction::Putfield(origin_field),
+                Instruction::Return,
+            ],
+            setter_descriptor,
+            false,
+            Some(class_name_jvm),
+            "$rcj$setMemoryViewOrigin",
+        )?],
+    };
+
+    Ok(vec![getter, setter])
+}
+
 /// Creates a ClassFile (as bytes) for a given OOMIR DataType that's a class
 pub(super) fn create_data_type_classfile_for_class(
     // pub(super) or pub(crate)
@@ -1584,6 +1648,9 @@ pub(super) fn create_data_type_classfile_for_class(
         if seen_interfaces.insert(rust_copy_interface) {
             interface_indices.push(cp.add_class(rust_copy_interface)?);
         }
+        if seen_interfaces.insert(MEMORY_VIEW_ORIGIN_CARRIER) {
+            interface_indices.push(cp.add_class(MEMORY_VIEW_ORIGIN_CARRIER)?);
+        }
     }
 
     let mut jvm_fields: Vec<jvm::Field> = Vec::new();
@@ -1621,6 +1688,18 @@ pub(super) fn create_data_type_classfile_for_class(
         );
     }
 
+    if !is_abstract {
+        jvm_fields.push(jvm::Field {
+            access_flags: FieldAccessFlags::PRIVATE
+                | FieldAccessFlags::VOLATILE
+                | FieldAccessFlags::SYNTHETIC,
+            name_index: cp.add_utf8(MEMORY_VIEW_ORIGIN_FIELD)?,
+            descriptor_index: cp.add_utf8("Ljava/lang/Object;")?,
+            field_type: jvm::FieldType::Object("java/lang/Object".into()),
+            attributes: Vec::new(),
+        });
+    }
+
     // Fielded Rust structs/enums must be initialized with all fields. Only genuinely
     // fieldless classes keep a no-args constructor.
     let constructor = if fields.is_empty() {
@@ -1629,6 +1708,13 @@ pub(super) fn create_data_type_classfile_for_class(
         create_field_constructor(&mut cp, this_class_index, super_class_index, &fields)?
     };
     let mut jvm_methods = vec![constructor];
+    if !is_abstract {
+        jvm_methods.extend(create_memory_view_origin_methods(
+            &mut cp,
+            this_class_index,
+            class_name_jvm,
+        )?);
+    }
     if fields
         .iter()
         .any(|(_, field_ty)| matches!(field_ty, Type::Pointer(_)))

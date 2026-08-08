@@ -29,7 +29,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 
-public final class Pointer {
+public final class Pointer implements MemoryViewOriginCarrier {
+    private volatile Object $rcj$memoryViewOrigin;
+
+    @Override
+    public Object $rcj$getMemoryViewOrigin() {
+        return $rcj$memoryViewOrigin;
+    }
+
+    @Override
+    public void $rcj$setMemoryViewOrigin(Object origin) {
+        $rcj$memoryViewOrigin = origin;
+    }
+
     private static final String RELATIVE_POINTER_ELEMENT_OFFSET_SUFFIX =
             "$rcj$elementOffset";
     private static final String RELATIVE_POINTER_BYTE_OFFSET_SUFFIX =
@@ -483,7 +495,7 @@ public final class Pointer {
     private static final Map<Object, LongRangeMap<MemoryViewState>>[] MEMORY_VIEWS =
             createWeakMapStripes();
     private static final Map<Object, MemoryViewOrigin>[] MEMORY_VIEW_ORIGINS =
-            createWeakMapStripes();
+            createMemoryViewOriginStripes();
     private static final Map<Object, Map<Object, Boolean>>[] MEMORY_ORIGIN_VIEWS =
             createWeakMapStripes();
     private static final Map<Object, RepeatedArrayState>[] REPEATED_ARRAYS =
@@ -517,6 +529,16 @@ public final class Pointer {
         Map<Object, V>[] stripes = (Map<Object, V>[]) new Map<?, ?>[STATE_STRIPE_COUNT];
         for (int index = 0; index < stripes.length; index++) {
             stripes[index] = new WeakIdentityMap<>();
+        }
+        return stripes;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<Object, MemoryViewOrigin>[] createMemoryViewOriginStripes() {
+        Map<Object, MemoryViewOrigin>[] stripes =
+                (Map<Object, MemoryViewOrigin>[]) new Map<?, ?>[STATE_STRIPE_COUNT];
+        for (int index = 0; index < stripes.length; index++) {
+            stripes[index] = new MemoryViewOriginMap();
         }
         return stripes;
     }
@@ -1365,6 +1387,76 @@ public final class Pointer {
                 index++;
             }
             return count;
+        }
+    }
+
+    /**
+     * Generated aggregate carriers can keep their memory-view origin on the
+     * carrier itself. This gives the metadata exactly the same lifetime as the
+     * decoded value and avoids allocating a weak-map entry for every transient
+     * aggregate materialization. Non-generated objects retain the identity-weak
+     * fallback so existing pointer semantics are unchanged.
+     */
+    private static final class MemoryViewOriginMap
+            extends AbstractMap<Object, MemoryViewOrigin> {
+        private final WeakIdentityMap<MemoryViewOrigin> fallback = new WeakIdentityMap<>();
+
+        private static MemoryViewOriginCarrier carrier(Object key) {
+            return key instanceof MemoryViewOriginCarrier
+                    ? (MemoryViewOriginCarrier) key
+                    : null;
+        }
+
+        @Override
+        public MemoryViewOrigin get(Object key) {
+            MemoryViewOriginCarrier carrier = carrier(key);
+            if (carrier != null) {
+                return (MemoryViewOrigin) carrier.$rcj$getMemoryViewOrigin();
+            }
+            return fallback.get(key);
+        }
+
+        @Override
+        public MemoryViewOrigin put(Object key, MemoryViewOrigin value) {
+            MemoryViewOriginCarrier carrier = carrier(key);
+            if (carrier != null) {
+                MemoryViewOrigin previous =
+                        (MemoryViewOrigin) carrier.$rcj$getMemoryViewOrigin();
+                carrier.$rcj$setMemoryViewOrigin(value);
+                return previous;
+            }
+            return fallback.put(key, value);
+        }
+
+        @Override
+        public MemoryViewOrigin remove(Object key) {
+            MemoryViewOriginCarrier carrier = carrier(key);
+            if (carrier != null) {
+                MemoryViewOrigin previous =
+                        (MemoryViewOrigin) carrier.$rcj$getMemoryViewOrigin();
+                carrier.$rcj$setMemoryViewOrigin(null);
+                return previous;
+            }
+            return fallback.remove(key);
+        }
+
+        @Override
+        public boolean containsKey(Object key) {
+            MemoryViewOriginCarrier carrier = carrier(key);
+            return carrier != null
+                    ? carrier.$rcj$getMemoryViewOrigin() != null
+                    : fallback.containsKey(key);
+        }
+
+        @Override
+        public Set<Map.Entry<Object, MemoryViewOrigin>> entrySet() {
+            // Carrier-backed entries are intentionally not enumerable: callers
+            // access them by identity, and only fallback keys need Bloom rebuilds.
+            return fallback.entrySet();
+        }
+
+        private long markFallbackLiveKeys(AtomicLongArray filter) {
+            return fallback.markLiveKeys(filter);
         }
     }
 
@@ -3380,6 +3472,9 @@ public final class Pointer {
     }
 
     private static void markIdentityFilter(RebuildableIdentityFilter filter, Object value) {
+        if (filter == MEMORY_VIEW_ORIGIN_FILTER && value instanceof MemoryViewOriginCarrier) {
+            return;
+        }
         AtomicLongArray primary = filter.primary;
         boolean added = markIdentityFilter(primary, value);
         AtomicLongArray secondary = filter.secondary;
@@ -3393,6 +3488,9 @@ public final class Pointer {
 
     private static boolean mayBeInIdentityFilter(
             RebuildableIdentityFilter filter, Object value) {
+        if (filter == MEMORY_VIEW_ORIGIN_FILTER && value instanceof MemoryViewOriginCarrier) {
+            return ((MemoryViewOriginCarrier) value).$rcj$getMemoryViewOrigin() != null;
+        }
         AtomicLongArray primary = filter.primary;
         if (mayBeInIdentityFilter(primary, value)) {
             return true;
@@ -3438,8 +3536,7 @@ public final class Pointer {
             MEMORY_VIEW_ORIGIN_FILTER.secondary = rebuilt;
             for (Map<Object, MemoryViewOrigin> stripe : MEMORY_VIEW_ORIGINS) {
                 synchronized (stripe) {
-                    ((WeakIdentityMap<MemoryViewOrigin>) stripe)
-                            .markLiveKeys(rebuilt);
+                    ((MemoryViewOriginMap) stripe).markFallbackLiveKeys(rebuilt);
                 }
             }
             MEMORY_VIEW_ORIGIN_FILTER.primary = rebuilt;
