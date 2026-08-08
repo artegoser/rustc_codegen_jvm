@@ -3,8 +3,8 @@ use super::{
     operand::convert_operand,
     types::{
         adapt_simple_enum_operand, generate_adt_jvm_class_name, get_field_name_from_index,
-        pointer_view_codec_operand, should_define_named_data_type, ty_to_oomir_type,
-        union_getter_method_name, union_setter_method_name,
+        is_codegen_sized, pointer_view_codec_operand, should_define_named_data_type,
+        ty_to_oomir_type, union_getter_method_name, union_setter_method_name,
     },
 };
 use crate::oomir::{self, DataTypeMethod, Instruction, Operand};
@@ -1642,6 +1642,48 @@ pub fn emit_instructions_to_set_value<'tcx>(
             }
         }
 
+        // A sized aggregate reached through a pointer can be written in place. Keep
+        // its pointer rather than materializing the complete JVM carrier first.
+        // DST, union, and coroutine bases stay on their existing paths.
+        let direct_pointer_field_base = if matches!(last_projection, ProjectionElem::Field(..)) {
+            base_place
+                .projection
+                .split_last()
+                .and_then(|(projection, prefix)| {
+                    if !matches!(projection, ProjectionElem::Deref) {
+                        return None;
+                    }
+                    let pointer_place = Place {
+                        local: base_place.local,
+                        projection: tcx.mk_place_elems(prefix),
+                    };
+                    let base_rust_ty =
+                        EarlyBinder::bind(tcx, base_place.ty(&mir.local_decls, tcx).ty)
+                            .instantiate(tcx, instance.args)
+                            .skip_norm_wip();
+                    let sized_aggregate = match base_rust_ty.kind() {
+                        TyKind::Tuple(_) => true,
+                        TyKind::Adt(adt_def, _) => adt_def.is_struct(),
+                        _ => false,
+                    } && is_codegen_sized(base_rust_ty, tcx);
+                    let pointer_type =
+                        get_place_type(&pointer_place, mir, tcx, instance, data_types);
+                    if !sized_aggregate || !matches!(pointer_type, oomir::Type::Pointer(_)) {
+                        return None;
+                    }
+                    Some(emit_instructions_to_get_on_own(
+                        &pointer_place,
+                        tcx,
+                        instance,
+                        mir,
+                        data_types,
+                    ))
+                })
+        } else {
+            None
+        };
+        let direct_pointer_field = direct_pointer_field_base.is_some();
+
         // 2. Generate instructions to get the value of the *base* place.
         //    This base value is the object we'll call SetField on, or the array
         //    we'll call ArrayStore on.
@@ -1676,7 +1718,8 @@ pub fn emit_instructions_to_set_value<'tcx>(
                         )
                     })
                 });
-        let (base_var_name, get_base_instructions, base_oomir_type) = direct_slice_base
+        let (base_var_name, get_base_instructions, base_oomir_type) = direct_pointer_field_base
+            .or_else(|| direct_slice_base)
             .unwrap_or_else(|| {
                 emit_instructions_to_get_on_own(&base_place, tcx, instance, mir, data_types)
             });
@@ -1697,8 +1740,9 @@ pub fn emit_instructions_to_set_value<'tcx>(
                 let base_rust_ty = EarlyBinder::bind(tcx, base_place.ty(&mir.local_decls, tcx).ty)
                     .instantiate(tcx, instance.args)
                     .skip_norm_wip();
-                if matches!(base_oomir_type, oomir::Type::Pointer(_))
-                    && has_slice_or_str_struct_tail(tcx, base_rust_ty)
+                if direct_pointer_field
+                    || (matches!(base_oomir_type, oomir::Type::Pointer(_))
+                        && has_slice_or_str_struct_tail(tcx, base_rust_ty))
                 {
                     let layout = tcx
                         .layout_of(TypingEnv::fully_monomorphized().as_query_input(base_rust_ty))
