@@ -446,6 +446,11 @@ pub fn mir_to_oomir<'tcx>(
     });
     let _stable_cell_analysis = place::enter_stable_cell_analysis(mir);
 
+    // Release optimization can leave dependency-private ADTs only in MIR for
+    // a generic function instantiated by this crate. Emit those definitions
+    // here because their owning crate may have no corresponding mono-item.
+    types::force_define_external_mir_adts(mir, tcx, data_types, instance);
+
     // Extract function signature
     // Closures require special handling - we must use as_closure().sig() instead of fn_sig()
     // Instantiate the function's item type with this instance's generic args, so
@@ -479,6 +484,10 @@ pub fn mir_to_oomir<'tcx>(
             (params, mir.local_decls[Local::from_usize(0)].ty)
         }
     };
+
+    for ty in params_ty.iter().copied().chain(std::iter::once(return_ty)) {
+        types::force_define_external_adts_in_ty(ty, tcx, data_types, instance);
+    }
 
     let closure_has_captures = matches!(
         instance_ty.kind(),

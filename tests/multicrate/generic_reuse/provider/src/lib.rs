@@ -98,6 +98,31 @@ pub fn use_private_token<T>(input: T) -> u32 {
     token.value
 }
 
+enum PrivateStrategy {
+    Add,
+    Multiply,
+}
+
+#[inline(always)]
+fn apply_private_strategy<T>(input: &T, value: u32, strategy: PrivateStrategy) -> u32 {
+    core::hint::black_box(input);
+    match strategy {
+        PrivateStrategy::Add => value + 3,
+        PrivateStrategy::Multiply => value * 3,
+    }
+}
+
+// Neither this enum nor its generic consumer has an upstream mono-item. In a
+// release build both therefore survive only in the downstream instantiation.
+pub fn use_private_strategy<T>(input: T, multiply: bool) -> u32 {
+    let strategy = if multiply {
+        PrivateStrategy::Multiply
+    } else {
+        PrivateStrategy::Add
+    };
+    apply_private_strategy(&input, 14, strategy)
+}
+
 pub fn invoke_result_closure<F: FnOnce() -> Result<(), u32>>(callback: F) -> Result<(), u32> {
     shared_result_identity(callback())
 }

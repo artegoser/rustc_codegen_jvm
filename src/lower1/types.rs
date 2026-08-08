@@ -5,6 +5,7 @@ use rustc_abi::{FieldIdx, TagEncoding, VariantIdx, Variants};
 use rustc_data_structures::stable_hash::{StableHash, StableHasher};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use rustc_hashes::Hash64;
+use rustc_middle::mir::visit::{TyContext, Visitor};
 use rustc_middle::ty::layout::TyAndLayout;
 use rustc_middle::ty::print::{with_no_trimmed_paths, with_resolve_crate_name};
 use rustc_middle::ty::{
@@ -6622,6 +6623,61 @@ pub fn force_define_named_adt<'tcx>(
         instance_context,
     );
     oomir::Type::Class(jvm_name)
+}
+
+/// Define non-generic dependency ADTs which survive in a downstream
+/// monomorphization's optimized MIR.
+///
+/// Ordinary type lowering assumes a non-generic dependency type was emitted
+/// by its owning crate. That is not true when the only use lives inside a
+/// generic function instantiated downstream: release MIR can move the whole
+/// use into the downstream crate while the provider has no mono-item that
+/// causes the private type to be emitted.
+pub fn force_define_external_mir_adts<'tcx>(
+    mir: &rustc_middle::mir::Body<'tcx>,
+    tcx: TyCtxt<'tcx>,
+    data_types: &mut HashMap<String, oomir::DataType>,
+    instance_context: rustc_middle::ty::Instance<'tcx>,
+) {
+    #[derive(Default)]
+    struct MirTypeCollector<'tcx> {
+        types: Vec<Ty<'tcx>>,
+    }
+
+    impl<'tcx> Visitor<'tcx> for MirTypeCollector<'tcx> {
+        fn visit_ty(&mut self, ty: Ty<'tcx>, _: TyContext) {
+            self.types.push(ty);
+        }
+    }
+
+    let mut collector = MirTypeCollector::default();
+    collector.visit_body(mir);
+    for ty in collector.types {
+        force_define_external_adts_in_ty(ty, tcx, data_types, instance_context);
+    }
+}
+
+pub fn force_define_external_adts_in_ty<'tcx>(
+    ty: Ty<'tcx>,
+    tcx: TyCtxt<'tcx>,
+    data_types: &mut HashMap<String, oomir::DataType>,
+    instance_context: rustc_middle::ty::Instance<'tcx>,
+) {
+    let instantiated = EarlyBinder::bind(tcx, ty).instantiate(tcx, instance_context.args);
+    let resolved = tcx
+        .try_normalize_erasing_regions(TypingEnv::fully_monomorphized(), instantiated)
+        .unwrap_or_else(|_| instantiated.skip_norm_wip());
+    for arg in resolved.walk() {
+        let Some(ty) = arg.as_type() else {
+            continue;
+        };
+        let TyKind::Adt(adt_def, substs) = ty.kind() else {
+            continue;
+        };
+        if !should_define_named_data_type(tcx, adt_def.did()) && substs.is_empty() {
+            force_define_named_adt(ty, tcx, data_types, instance_context);
+        }
+    }
 }
 
 /// Converts a fully monomorphized Rust MIR type (`Ty`) to an OOMIR type.
