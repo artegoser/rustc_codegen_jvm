@@ -1643,6 +1643,20 @@ public final class Pointer implements MemoryViewOriginCarrier {
         }
     }
 
+    private static MemoryViewOrigin memoryViewOrigin(Object value) {
+        if (value instanceof MemoryViewOriginCarrier) {
+            return (MemoryViewOrigin)
+                    ((MemoryViewOriginCarrier) value).$rcj$getMemoryViewOrigin();
+        }
+        if (value == null || !mayBeInIdentityFilter(MEMORY_VIEW_ORIGIN_FILTER, value)) {
+            return null;
+        }
+        Map<Object, MemoryViewOrigin> stripe = stateStripe(MEMORY_VIEW_ORIGINS, value);
+        synchronized (stripe) {
+            return stripe.get(value);
+        }
+    }
+
     private static final class ManagedCopyPlan {
         private final ManagedFieldPlan[] fields;
         private final ConstructorPlan constructor;
@@ -3918,14 +3932,23 @@ public final class Pointer implements MemoryViewOriginCarrier {
             return;
         }
         MemoryViewOrigin previous;
-        Map<Object, MemoryViewOrigin> stripe = stateStripe(MEMORY_VIEW_ORIGINS, value);
-        synchronized (stripe) {
-            previous = stripe.get(value);
+        if (value instanceof MemoryViewOriginCarrier) {
+            MemoryViewOriginCarrier carrier = (MemoryViewOriginCarrier) value;
+            previous = (MemoryViewOrigin) carrier.$rcj$getMemoryViewOrigin();
             if (previous != null && previous.matches(this)) {
                 return;
             }
-            markIdentityFilter(MEMORY_VIEW_ORIGIN_FILTER, value);
-            previous = stripe.put(value, new MemoryViewOrigin(this));
+            carrier.$rcj$setMemoryViewOrigin(new MemoryViewOrigin(this));
+        } else {
+            Map<Object, MemoryViewOrigin> stripe = stateStripe(MEMORY_VIEW_ORIGINS, value);
+            synchronized (stripe) {
+                previous = stripe.get(value);
+                if (previous != null && previous.matches(this)) {
+                    return;
+                }
+                markIdentityFilter(MEMORY_VIEW_ORIGIN_FILTER, value);
+                previous = stripe.put(value, new MemoryViewOrigin(this));
+            }
         }
         maybeRebuildMemoryViewOriginFilter();
         Object previousAllocation = previous == null ? null : previous.allocation.get();
@@ -4046,11 +4069,7 @@ public final class Pointer implements MemoryViewOriginCarrier {
         if (value == null || !mayBeInIdentityFilter(MEMORY_VIEW_ORIGIN_FILTER, value)) {
             return;
         }
-        MemoryViewOrigin origin;
-        Map<Object, MemoryViewOrigin> originStripe = stateStripe(MEMORY_VIEW_ORIGINS, value);
-        synchronized (originStripe) {
-            origin = originStripe.get(value);
-        }
+        MemoryViewOrigin origin = memoryViewOrigin(value);
         if (origin == null) {
             return;
         }
@@ -10094,12 +10113,7 @@ public final class Pointer implements MemoryViewOriginCarrier {
         if (!mayBeInIdentityFilter(MEMORY_VIEW_ORIGIN_FILTER, value)) {
             return false;
         }
-        MemoryViewOrigin origin;
-        Map<Object, MemoryViewOrigin> originStripe =
-                stateStripe(MEMORY_VIEW_ORIGINS, value);
-        synchronized (originStripe) {
-            origin = originStripe.get(value);
-        }
+        MemoryViewOrigin origin = memoryViewOrigin(value);
         if (origin == null
                 || origin.allocation.get() != allocation
                 || origin.byteOffset != byteOffset
