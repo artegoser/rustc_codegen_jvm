@@ -1857,6 +1857,22 @@ fn read_managed_inner(mut base: AlignedBox<DeepNode>) -> DeepNode {
     unsafe { inner_alias.read() }
 }
 
+fn escape_managed_inner(mut base: AlignedBox<DeepNode>) -> *mut DeepNode {
+    core::ptr::addr_of_mut!(base.inner)
+}
+
+fn set_then_read_managed_alias_group(
+    mut base: AlignedBox<DeepNode>,
+    replacement: DeepNode,
+) -> DeepNode {
+    let first = core::ptr::addr_of_mut!(base.inner);
+    let second = first;
+    unsafe {
+        second.write(replacement);
+        first.read()
+    }
+}
+
 fn assign_transparent_inner(
     mut base: AlignedBox<DeepNode>,
     replacement: DeepNode,
@@ -1900,6 +1916,11 @@ fn assign_zst(mut base: ZstHolder) -> ZstHolder {
         marker.write(ZeroSized);
     }
     base
+}
+
+fn read_zst_inner(mut base: ZstHolder) -> ZeroSized {
+    let marker = core::ptr::addr_of_mut!(base.marker);
+    unsafe { marker.read() }
 }
 
 fn assign_managed_inner(
@@ -1958,6 +1979,28 @@ fn deep_pointer_indirection_and_alignment() {
     });
     assert_eq!(readback.value, 7);
 
+    let escaped = escape_managed_inner(AlignedBox {
+        inner: DeepNode {
+            value: 7,
+            next: core::ptr::null_mut(),
+        },
+    });
+    assert_ne!(escaped as usize, 0);
+
+    let alias_group_readback = set_then_read_managed_alias_group(
+        AlignedBox {
+            inner: DeepNode {
+                value: 1,
+                next: core::ptr::null_mut(),
+            },
+        },
+        DeepNode {
+            value: 11,
+            next: core::ptr::null_mut(),
+        },
+    );
+    assert_eq!(alias_group_readback.value, 11);
+
     let wrapped_box = assign_transparent_inner(
         AlignedBox {
             inner: DeepNode {
@@ -2012,6 +2055,10 @@ fn deep_pointer_indirection_and_alignment() {
     let zst = assign_zst(ZstHolder { marker: ZeroSized });
     let zst_address = core::ptr::addr_of!(zst.marker) as usize;
     assert_ne!(zst_address, 0);
+
+    let zst_readback = read_zst_inner(ZstHolder { marker: ZeroSized });
+    let zst_readback_address = core::ptr::addr_of!(zst_readback) as usize;
+    assert_ne!(zst_readback_address, 0);
 
     let mut managed_box = assign_managed_inner(
         AlignedBox {
