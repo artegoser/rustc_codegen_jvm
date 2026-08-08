@@ -733,6 +733,12 @@ fn aggregate_memory_layout() {
     }
     assert!(wide.value == 0xaa22_3344_5566_7788_99aa_bbcc_ddee_ff00_u128);
     assert!(wide.marker == 42);
+
+    let wide_value = core::ptr::addr_of_mut!(wide.value);
+    unsafe {
+        *wide_value = 0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10_u128;
+    }
+    assert!(wide.value == 0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10_u128);
 }
 
 fn managed_reference_fields_have_memory_bits() {
@@ -1559,6 +1565,20 @@ enum CustomEnum {
     Beta(u32) = 2,
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy)]
+enum FieldlessState {
+    Idle = 1,
+    Ready = 2,
+}
+
+#[repr(C)]
+struct FieldlessStateHolder {
+    state: FieldlessState,
+    empty: Empty,
+    value: u32,
+}
+
 fn enum_discriminant_pointer_manipulation() {
     let mut val = CustomEnum::Alpha(100);
     let ptr = &mut val as *mut CustomEnum;
@@ -1577,6 +1597,30 @@ fn enum_discriminant_pointer_manipulation() {
         CustomEnum::Beta(payload) => assert_eq!(payload, 200),
         CustomEnum::Alpha(_) => panic!("Failed to change variant via raw pointer"),
     }
+}
+
+fn fieldless_enum_and_zst_pointer_projections() {
+    let mut holder = FieldlessStateHolder {
+        state: FieldlessState::Idle,
+        empty: Empty,
+        value: 7,
+    };
+    let base = &mut holder as *mut FieldlessStateHolder;
+
+    unsafe {
+        let state = core::ptr::addr_of_mut!((*base).state);
+        assert_eq!(*state as u8, 1);
+        *state = FieldlessState::Ready;
+
+        let empty = core::ptr::addr_of_mut!((*base).empty);
+        assert!(empty.addr() >= base.addr());
+
+        let value = core::ptr::addr_of_mut!((*base).value);
+        *value = 42;
+    }
+
+    assert!(matches!(holder.state, FieldlessState::Ready));
+    assert_eq!(holder.value, 42);
 }
 
 fn multidimensional_pointer_flat_map() {
@@ -2376,6 +2420,7 @@ fn main() {
     stack_realignment();
     zst_and_padding_offsets();
     enum_discriminant_pointer_manipulation();
+    fieldless_enum_and_zst_pointer_projections();
     multidimensional_pointer_flat_map();
     packed_unaligned_fields();
     sized_to_unsized_coercion();

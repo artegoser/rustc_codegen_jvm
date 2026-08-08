@@ -954,6 +954,9 @@ pub fn emit_instructions_to_get_recursive<'tcx>(
                         current_var = next_var;
                     } else {
                         current_type = ty_to_oomir_type(field_rust_ty, tcx, data_types, instance);
+                        let field_size = super::types::layout_size_bytes(tcx, field_rust_ty)
+                            .expect("sized DST field must have a layout");
+                        let managed_field = field_size == 0 || current_type.is_jvm_reference_type();
                         let field_pointer_ty = oomir::Type::Pointer(Box::new(current_type.clone()));
                         let typed_pointer_name = format!("{current_var}_typed_field_pointer");
                         instructions.push(Instruction::InvokeVirtual {
@@ -968,6 +971,7 @@ pub fn emit_instructions_to_get_recursive<'tcx>(
                                     ("field_offset".to_string(), oomir::Type::U64),
                                     ("field_size".to_string(), oomir::Type::U64),
                                     ("field_codec".to_string(), oomir::Type::java_string()),
+                                    ("managed_field".to_string(), oomir::Type::Boolean),
                                 ],
                                 ret: Box::new(field_pointer_ty.clone()),
                                 is_static: false,
@@ -977,11 +981,8 @@ pub fn emit_instructions_to_get_recursive<'tcx>(
                                 Operand::Constant(oomir::Constant::String(field_name)),
                                 field_offset,
                                 Operand::Constant(oomir::Constant::U64(
-                                    u64::try_from(
-                                        super::types::layout_size_bytes(tcx, field_rust_ty)
-                                            .expect("sized DST field must have a layout"),
-                                    )
-                                    .expect("Rust DST field layout exceeds u64"),
+                                    u64::try_from(field_size)
+                                        .expect("Rust DST field layout exceeds u64"),
                                 )),
                                 pointer_view_codec_operand(
                                     field_rust_ty,
@@ -989,6 +990,7 @@ pub fn emit_instructions_to_get_recursive<'tcx>(
                                     data_types,
                                     instance,
                                 ),
+                                Operand::Constant(oomir::Constant::Boolean(managed_field)),
                             ],
                             operand: Operand::Variable {
                                 name: base_pointer_name,
@@ -1756,6 +1758,9 @@ pub fn emit_instructions_to_set_value<'tcx>(
                         .instantiate(tcx, instance.args)
                         .skip_norm_wip();
                     let field_oomir_ty = ty_to_oomir_type(field_rust_ty, tcx, data_types, instance);
+                    let field_size = super::types::layout_size_bytes(tcx, field_rust_ty)
+                        .expect("sized DST field must have a layout");
+                    let managed_field = field_size == 0 || field_oomir_ty.is_jvm_reference_type();
                     let field_pointer_ty = oomir::Type::Pointer(Box::new(field_oomir_ty.clone()));
                     let oomir::Type::Pointer(base_pointee_ty) = &base_oomir_type else {
                         unreachable!();
@@ -1785,6 +1790,7 @@ pub fn emit_instructions_to_set_value<'tcx>(
                                 ("field_offset".to_string(), oomir::Type::U64),
                                 ("field_size".to_string(), oomir::Type::U64),
                                 ("field_codec".to_string(), oomir::Type::java_string()),
+                                ("managed_field".to_string(), oomir::Type::Boolean),
                             ],
                             ret: Box::new(field_pointer_ty.clone()),
                             is_static: false,
@@ -1797,13 +1803,11 @@ pub fn emit_instructions_to_set_value<'tcx>(
                                     .expect("Rust DST field offset exceeds u64"),
                             )),
                             Operand::Constant(oomir::Constant::U64(
-                                u64::try_from(
-                                    super::types::layout_size_bytes(tcx, field_rust_ty)
-                                        .expect("sized DST field must have a layout"),
-                                )
-                                .expect("Rust DST field layout exceeds u64"),
+                                u64::try_from(field_size)
+                                    .expect("Rust DST field layout exceeds u64"),
                             )),
                             pointer_view_codec_operand(field_rust_ty, tcx, data_types, instance),
+                            Operand::Constant(oomir::Constant::Boolean(managed_field)),
                         ],
                         operand: Operand::Variable {
                             name: base_var_name,

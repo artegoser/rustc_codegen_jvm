@@ -5384,16 +5384,93 @@ public final class Pointer implements MemoryViewOriginCarrier {
     public Pointer projectStructField(
             String ownerClassName,
             String fieldName,
+            int fieldOffset,
+            int fieldSize,
+            String fieldCodecClassName,
+            boolean managedField) {
+        return projectStructField(
+                ownerClassName,
+                fieldName,
+                (long) fieldOffset,
+                (long) fieldSize,
+                fieldCodecClassName,
+                managedField);
+    }
+
+    public Pointer projectStructField(
+            String ownerClassName,
+            String fieldName,
             long fieldOffset,
             long fieldSize,
             String fieldCodecClassName) {
-        boolean managedField = fieldSize == 0;
+        return projectStructFieldInferred(
+                ownerClassName, fieldName, fieldOffset, fieldSize, fieldCodecClassName);
+    }
+
+    public Pointer projectStructField(
+            String ownerClassName,
+            String fieldName,
+            long fieldOffset,
+            long fieldSize,
+            String fieldCodecClassName,
+            boolean managedField) {
+        return projectStructFieldKnown(
+                ownerClassName,
+                fieldName,
+                fieldOffset,
+                fieldSize,
+                fieldCodecClassName,
+                managedField);
+    }
+
+    private Pointer projectStructFieldInferred(
+            String ownerClassName,
+            String fieldName,
+            long fieldOffset,
+            long fieldSize,
+            String fieldCodecClassName) {
+        return projectStructFieldImpl(
+                ownerClassName,
+                fieldName,
+                fieldOffset,
+                fieldSize,
+                fieldCodecClassName,
+                false,
+                true);
+    }
+
+    private Pointer projectStructFieldKnown(
+            String ownerClassName,
+            String fieldName,
+            long fieldOffset,
+            long fieldSize,
+            String fieldCodecClassName,
+            boolean managedFieldHint) {
+        return projectStructFieldImpl(
+                ownerClassName,
+                fieldName,
+                fieldOffset,
+                fieldSize,
+                fieldCodecClassName,
+                managedFieldHint,
+                false);
+    }
+
+    private Pointer projectStructFieldImpl(
+            String ownerClassName,
+            String fieldName,
+            long fieldOffset,
+            long fieldSize,
+            String fieldCodecClassName,
+            boolean managedFieldHint,
+            boolean inferManagedField) {
+        boolean managedField = fieldSize == 0 || managedFieldHint;
         Class<?> fieldType = null;
-        if (!managedField || traitMetadataCarrier() != null) {
+        if ((inferManagedField && !managedField) || traitMetadataCarrier() != null) {
             try {
                 Class<?> ownerClass = resolvedRuntimeClass(ownerClassName);
                 fieldType = instanceField(ownerClass, fieldName).getType();
-                if (!managedField) {
+                if (inferManagedField && !managedField) {
                     managedField = !fieldType.isPrimitive();
                 }
             } catch (ClassNotFoundException error) {

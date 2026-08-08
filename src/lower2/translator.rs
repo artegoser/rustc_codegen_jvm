@@ -6969,7 +6969,7 @@ fn direct_field_projections(
                     };
                     if class_name != oomir::POINTER_CLASS
                         || method_name != "projectStructField"
-                        || args.len() != 5
+                        || !matches!(args.len(), 5 | 6)
                         || !field_ty.has_jvm_value()
                     {
                         continue;
